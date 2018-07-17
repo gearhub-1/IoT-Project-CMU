@@ -96,9 +96,9 @@ void loop() {
     }
     lockDelay = 0;
   }
-
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
+//status update
+  if (currentMillis - previousMillis >= interval) { 
+    previousMillis = currentMillis; 
 
     if (modeAP == 1) {
       sum = calSum();
