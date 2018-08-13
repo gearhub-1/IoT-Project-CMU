@@ -79,11 +79,10 @@ void loop()
 {
 
   unsigned long currentMillis = millis();
-  time_t now = time(nullptr);
-  struct tm *newtime = localtime(&now);
-
   int sensor_D5 = digitalRead(PIR_R);
 
+  time_t now = time(nullptr);
+  struct tm *newtime = localtime(&now);
   String tmpNowF = "";
   int tmpMonth =0;
   int tmpDay = 0;
@@ -97,7 +96,7 @@ void loop()
   tmpNowF += String(newtime->tm_min);
   tmpNowF += ":";
   tmpNowF += String(newtime->tm_sec);
-  re = Firebase.getInt("reset/sensor/" + portNum);
+  
 
   if (re == 1)
   {
@@ -105,21 +104,24 @@ void loop()
     ESP.restart();
   }
 
-  if (currentMillis - previousMillisOne >= interval1sec)
+  if (currentMillis - previousMillisOne >= interval1sec) //check sensor every 1 sec
   {
     previousMillisOne = currentMillis;
-    pubWhenChange(sensor_D5, tmpNowF);
-    consoleDisplay(sensor_D5, tmpNowF);
-    setNow(sensor_D5);
-    Serial.println("SENSOR: " + portNum);
+    pubWhenChange(sensor_D5, tmpNowF); //set when sensor change
+    //consoleDisplay(sensor_D5, tmpNowF);
+    //Serial.println("SENSOR: " + portNum);
+    re = Firebase.getInt("reset/sensor/" + portNum); // restart sensor
   }
 
-  if (currentMillis - previousMillisTwo >= interval1min)
+  if (currentMillis - previousMillisTwo >= interval1min) // set sensor every 1 min
   {
     previousMillisTwo = currentMillis;
     pubNow(sensor_D5, tmpNowF , tmpMonth , tmpDay, hr);
   }
 }
+
+
+
 void consoleDisplay(int one, String timeN)
 {
   Serial.println("----------------------------");
@@ -133,29 +135,25 @@ void consoleDisplay(int one, String timeN)
 void pubWhenChange(int senD5, String tmpNow)
 {
 
-  StaticJsonBuffer<200> jsonBuffer1;
-  JsonObject &pir1 = jsonBuffer1.createObject();
+  // StaticJsonBuffer<200> jsonBuffer1;
+  // JsonObject &pir1 = jsonBuffer1.createObject();
 
   if (senD5 == 1 && lock_1 == 0)
   {
-    Serial.print("Publish: push/sensor/event/" + portNum + "/D5 '1' ");
-    Serial.print("Time :");
-    Serial.println(tmpNow);
-    pir1["PIR"] = 1;
+ /*    pir1["PIR"] = 1;
     pir1["time"] = tmpNow;
     lock_1 = 1;
-    pirStr1 = Firebase.push("push/sensor/event/" + portNum + "/D5", pir1);
+    pirStr1 = Firebase.push("push/sensor/event/" + portNum + "/D5", pir1); */
+    setNow(senD5);
   }
 
   if (senD5 == 0 && lock_1 == 1)
   {
-    Serial.print("Publish: push/sensor/event/" + portNum + "/D5 '0' ");
-    Serial.print("Time :");
-    Serial.println(tmpNow);
-    pir1["PIR"] = 0;
+   /*  pir1["PIR"] = 0;
     pir1["time"] = tmpNow;
     lock_1 = 0;
-    pirStr1 = Firebase.push("push/sensor/event/" + portNum + "/D5", pir1);
+    pirStr1 = Firebase.push("push/sensor/event/" + portNum + "/D5", pir1); */
+    setNow(senD5);
   }
 }
 
@@ -181,13 +179,11 @@ void pubNow(int sensorD5, String timeNow , int monthNow , int dayNow, int hrNow)
   pir3["D5"] = sensorD5;
   pir3["time"] = timeNow;
   Firebase.push("push/sensor/interval/" + portNum + "/" + dayN + monN + "/" + hrNow + ":00" , pir3);
+  
 }
 
 void setNow(int sensorD5set)
 {
-  StaticJsonBuffer<200> jsonBuffer4;
-  JsonObject &pir4 = jsonBuffer4.createObject();
-
-  pir4["D5"] = sensorD5set;
-  Firebase.set("set/sensor/interval/" + portNum, pir4);
+  Firebase.setInt("status/sensor/" + portNum, sensorD5set);
 }
+ 
