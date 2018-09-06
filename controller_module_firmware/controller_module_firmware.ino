@@ -3,7 +3,7 @@
 #include "stdlib.h"
 #include "FirebaseArduino.h"
 #include "setupKey.h"
-
+#include "user_interface.h"
 #define relay D5
 
 // Config time
@@ -29,6 +29,9 @@ void setup()
   Serial.begin(9600);
   pinMode(relay, OUTPUT);
 
+  wifi_set_phy_mode(PHY_MODE_11G);
+  system_phy_set_max_tpw(40);
+  WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("connecting");
   while (WiFi.status() != WL_CONNECTED)
@@ -40,6 +43,15 @@ void setup()
   Serial.print("connected: ");
   Serial.println(WiFi.localIP());
 
+  //Time Server
+  configTime(timezone * 3600, dst, ntp_server1, ntp_server2, ntp_server3);
+  Serial.println("Waiting for time");
+  while (!time(nullptr))
+  {
+    Serial.print(".");
+    delay(500);
+  }
+
   Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
   Serial.println("connected Firebase server!");
 }
@@ -47,10 +59,9 @@ void setup()
 int sumSensor = 0;
 int sensorSensitive = 5;
 
-int lockDelay = 0;
-int timer = 0;
+int lockAuto = 0;
 int timeDelay = 1;
-int run1stTime = 0;
+int startOff1st = 0;
 String power = "N/A";
 int modeAP = 0;
 int manualPower = 0;
@@ -59,150 +70,205 @@ int sleepM = 0;
 unsigned long sleepTime = 0;
 unsigned long sleepCurrent = 0;
 int re = 0;
+int s1st = 0;
+int a1st = 0;
+int m1st = 0;
+int m2nd = 0;
 
 void loop()
 {
 
   unsigned long currentMillis = millis();
 
+  StaticJsonBuffer<200> jsonBuffer3;
+  JsonObject &controller = jsonBuffer3.createObject();
+
+  //time function
+  time_t now = time(nullptr);
+  struct tm *newtime = localtime(&now);
+  String tmpNowF = "";
+  String dayN = "";
+  String monN = "";
+  int tmpMonth =0;
+  int tmpDay = 0;
+  int hr = 0;
+  hr = newtime->tm_hour;
+  tmpMonth = newtime->tm_mon + 1;
+  tmpDay = int(newtime->tm_mday);
+
+  if (tmpMonth < 10) {
+    monN = "0" + String(tmpMonth);
+  } else if (tmpMonth >= 10) {
+    monN = String(tmpMonth);
+  }
+  if (tmpDay < 10) {
+    dayN = "0" + String(tmpDay);
+  } else if (tmpDay >= 10) {
+    dayN = String(tmpDay);
+  }
+
+
+
+  if(newtime->tm_hour < 10){
+    tmpNowF += "0" + String(newtime->tm_hour);
+  }else if(newtime->tm_hour >= 10){
+     tmpNowF += String(newtime->tm_hour);
+  }
+  
+  tmpNowF += ":";
+  
+  if(newtime->tm_min < 10){
+    tmpNowF += "0" + String(newtime->tm_min);
+  }else if(newtime->tm_min >= 10){
+     tmpNowF += String(newtime->tm_min);
+  }
+  
+  tmpNowF += ":";
+
+  if(newtime->tm_sec < 10){
+    tmpNowF += "0" + String(newtime->tm_sec);
+  }else if(newtime->tm_sec >= 10){
+     tmpNowF += String(newtime->tm_sec);
+  }
+
+
+
+
   if (re == 1)
   {
-    Firebase.setInt("reset/controller/1", 0);
+    Firebase.setInt("setting/reset/controller", 0);
+    Serial.println(tmpNowF+"   System restart ...");
     ESP.restart();
   }
 
   if (currentMillis - pre >= interval)
   {
+    //Serial.println(tmpNowF+"   Get setting from firbase");
     pre = currentMillis;
     sensorSensitive = Firebase.getInt("setting/sensitive");
-    delaytimer = Firebase.getInt("setting/delay");
-    modeAP = Firebase.getInt("status/mode");
-    manualPower = Firebase.getInt("status/power");
-    sleepTime = Firebase.getInt("setting/sleep");
-    re = Firebase.getInt("reset/controller/1");
+    delaytimer = Firebase.getInt("setting/timmer_delay");
+    modeAP = Firebase.getInt("status/controller/mode");
+    manualPower = Firebase.getInt("status/controller/power");
+    sleepTime = Firebase.getInt("setting/sleep_delay");
+    re = Firebase.getInt("setting/reset/controller");
   }
 
-  if (modeAP == 0)
+  if (modeAP == 0) //manual
   {
     digitalWrite(relay, (manualPower == 1 ? HIGH : LOW));
-    power = (manualPower == 1) ? "ON" : "OFF";
-    lockDelay = 0;
+    if(manualPower == 1 && m1st == 0){
+      Serial.println(tmpNowF + "   Manual Turn ON");
+      controller["Log"] = tmpNowF + " Manual Turn ON";
+      Firebase.push("log/controller/"+ dayN + monN ,controller);
+      m1st = 1;
+      m2nd = 0;
+    }
+    if(manualPower == 0 && m2nd == 0){
+      Serial.println(tmpNowF + "   Manual Turn OFF");
+      controller["Log"] = tmpNowF + " Manual Turn OFF";
+      Firebase.push("log/controller/"+ dayN + monN ,controller);
+      m1st = 0;
+      m2nd = 1;
+    }
+
+    a1st = 0;
+    lockAuto = 0;
     sleepM = 0;
+    startOff1st = 0;
   }
-  else if (modeAP == 3)
+
+  else if (modeAP == 3) //sleep
   {
     if (sleepM == 0)
     {
       sleepM = 1;
-      digitalWrite(relay, HIGH);
+      digitalWrite(relay, HIGH); //on
       sleepCurrent = currentMillis;
+      Serial.println(tmpNowF+"   Start sleep mode");
+      controller["Log"] = tmpNowF + " Start sleep mode";
+      Firebase.push("log/controller/"+ dayN + monN ,controller);
     }
     else if (sleepM == 1)
     {
       if ((currentMillis - sleepCurrent) >= sleepTime)
       {
-        digitalWrite(relay, LOW);
+        digitalWrite(relay, LOW); //off
         sleepM = 0;
-        Firebase.setInt("status/mode", 0);
-        Firebase.setInt("status/power", 0);
+        Firebase.setInt("status/controller/mode", 0);
+        Firebase.setInt("status/controller/power", 0);
+        Serial.println(tmpNowF+"   Time up Turn OFF");
+        controller["Log"] = tmpNowF + " Time up Turn OFF";
+        Firebase.push("log/controller/"+ dayN + monN ,controller);
+        s1st = 0;
       }
     }
-    lockDelay = 0;
+    lockAuto = 0;
+    a1st = 0;
+    startOff1st = 0;
   }
-  //status update
-  if (currentMillis - previousMillis >= interval)
-  {
-    previousMillis = currentMillis;
 
-    if (modeAP == 1)
+    if (lockAuto == 0 && modeAP == 1) //auto mode
     {
-      sum = calSum();
+      s1st = 0;
       sleepM = 0;
-      if (sum >= sensorSensitive && lockDelay == 0)
+
+      if(a1st == 0){
+        Serial.println(tmpNowF+"   Automatic Mode");
+        controller["Log"] = tmpNowF + " Automatic Mode";
+        Firebase.push("log/controller/"+ dayN + monN ,controller);
+        a1st = 1;
+      }
+      if (calSum() >= sensorSensitive ) // if sum of(sensor == "true") > sensitive turn on light
       {
-        lockDelay = 1;
+        lockAuto = 1;
         digitalWrite(relay, HIGH);
-        Serial.println("TURN ON");
-        Firebase.setInt("status/power", 1);
-        power = "ON";
-        timer = 0;
+        Serial.println(tmpNowF + "   Automatic Turn ON");
+        controller["Log"] = tmpNowF + " Automatic Turn ON";
+        Firebase.push("log/controller/"+ dayN + monN ,controller);
+        Firebase.setInt("status/controller/power", 1);
       }
-      else if (sum < 1 && lockDelay == 0 && run1stTime == 0)
+      else if (startOff1st == 0 && calSum() < 1) //first time if sum of(sensor=="true") < sensitive turn off light
       {
         digitalWrite(relay, LOW);
-        Serial.println("TURN OFF 1st");
-        Firebase.setInt("status/power", 0);
-        run1stTime = 1;
-        power = "OFF";
+        Serial.println(tmpNowF + "   Automatic turn OFF");
+        controller["Log"] = tmpNowF + " Automatic turn OFF";
+        Firebase.push("log/controller/"+ dayN + monN ,controller);
+        Firebase.setInt("status/controller/power", 0);
+        startOff1st = 1;
       }
     }
-    //displayScreen(power, modeAP, delaytimer, sensorSensitive,sum);
-  }
 
-  if (currentMillis - previous >= delaytimer)
+  if (currentMillis - previous >= delaytimer) //circle time check sum of sensor for turn off light
   {
-    // save the last time you blinked the LED
     previous = currentMillis;
-    if (lockDelay == 1 && modeAP == 1)
+    if (lockAuto == 1 && modeAP == 1)
     {
-      timer++;
-      Serial.print("INTERVAL :");
-      Serial.println(timer);
-      if (calSum() < sensorSensitive)
+      if (calSum() < sensorSensitive) //check sensor sum
       {
-        lockDelay = 0;
+        lockAuto = 0; //set for turn on if()
         digitalWrite(relay, LOW);
-        Serial.println("TURN OFF");
-        Firebase.setInt("status/power", 0);
-        power = "OFF";
-        timer = 0;
+        Serial.println(tmpNowF + "   Automatic turn OFF");
+        controller["Log"] = tmpNowF + " Automatic turn OFF";
+        Firebase.push("log/controller/"+ dayN + monN ,controller);
+        Firebase.setInt("status/controller/power", 0);
       }
     }
   }
-}
-
-void displayScreen(String powerRev, int modeN, int delayN, int sst, int sumN)
-{
-
-  Serial.print("STATUS : ");
-  Serial.println(powerRev);
-  Serial.print("SENSOR : ");
-  Serial.println(sumN);
-  Serial.print("MODE   : ");
-  (modeN == 1) ? Serial.println("AUTO") : Serial.println("MANUAL");
-  Serial.print("DELAY  : ");
-  Serial.print((delayN / 1000) / 60);
-  Serial.println(" min");
-  Serial.print("SST    : ");
-  Serial.println(sst);
-  Serial.println("");
 }
 
 int calSum()
 {
-
   int s1d5 = 0;
-  int s1d6 = 0;
   int s2d5 = 0;
-  int s2d6 = 0;
   int s3d5 = 0;
-  int s3d6 = 0;
   int s4d5 = 0;
-  int s4d6 = 0;
 
-  s1d5 = Firebase.getInt("set/sensor/interval/1/D5");
-  s1d6 = Firebase.getInt("set/sensor/interval/1/D6");
+  s1d5 = Firebase.getInt("status/sensor/1");
+  s2d5 = Firebase.getInt("status/sensor/2");
+  s3d5 = Firebase.getInt("status/sensor/3");
+  s4d5 = Firebase.getInt("status/sensor/4");
 
-  s2d5 = Firebase.getInt("set/sensor/interval/2/D5");
-  s2d6 = Firebase.getInt("set/sensor/interval/2/D6");
-
-  s3d5 = Firebase.getInt("set/sensor/interval/3/D5");
-  s3d6 = Firebase.getInt("set/sensor/interval/3/D6");
-
-  s4d5 = Firebase.getInt("set/sensor/interval/4/D5");
-  s4d6 = Firebase.getInt("set/sensor/interval/4/D6");
-
-  sumSensor = s1d5 + s1d6 + s2d5 + s2d6 + s3d5 + s3d6 + s4d5 + s4d6;
+  sumSensor = s1d5  + s2d5  + s3d5  + s4d5 ;
   //Serial.print("SUM: ");Serial.println(sumSensor);
   return sumSensor;
 }
